@@ -173,6 +173,7 @@ def initialize(debug: bool = False, args: list = None) -> None:
         sleep(1)
         try:
             sockets[1].connect((ADDRESS, int(PORT)+1))
+            net.send_message(sockets[1], f"REGISTER:{player_id}")
         except Exception as e:
             print(e)
             with open ("error_log.txt", "a") as f:

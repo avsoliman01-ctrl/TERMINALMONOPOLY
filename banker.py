@@ -150,6 +150,7 @@ def start_receivers() -> None:
     add_to_output_area("Main", "Receivers started!", COLORS.GREEN)  
     
 def receiver_loop(port:int, is_oof_thread: bool = False) -> None:
+    player_sockets = {}
     with socket.socket() as server:
         host = socket.gethostname()
         ip_address = socket.gethostbyname(host)
@@ -158,50 +159,84 @@ def receiver_loop(port:int, is_oof_thread: bool = False) -> None:
             port = 33333
         if is_oof_thread:
             server.bind((ip_address, int(port + 2)))
-            add_to_output_area("Main", f"OOF Receiver accepting connections at {port+2}", COLORS.GREEN)
+            add_to_output_area(
+                "Main",
+                f"OOF Receiver accepting connections at {port+2}",
+                COLORS.GREEN
+            )
         else:
             server.bind((ip_address, int(port + 1)))
-            add_to_output_area("Main", f"Receiver accepting connections at {port+1}", COLORS.GREEN)
+            add_to_output_area(
+                "Main",
+                f"Receiver accepting connections at {port+1}",
+                COLORS.GREEN
+            )
         server.listen()
-        # Credit to https://stackoverflow.com/a/43151772/19535084 for seamless server-client handling.
         to_read = [server]  # add server to list of readable sockets.
+
         while True:
-            # check for a connection to the server or data ready from clients.
-            # readers will be empty on timeout.
-            readers,_,_ = select.select(to_read,[],[],0.1)
+            readers, _, _ = select.select(to_read, [], [], 0.1)
             for reader in readers:
                 if reader is server:
-                    player,address = reader.accept()
+                    player, address = reader.accept()
                     if not is_oof_thread:
-                        add_to_output_area("Main", f"Player connected from: {address[0]}", COLORS.GREEN)
-                    to_read.append(player) # add client to list of readable sockets
+                        add_to_output_area(
+                            "Main",
+                            f"Player connected from: {address[0]}",
+                            COLORS.GREEN
+                        )
+                    to_read.append(player)  # add client to list of readable sockets
                 else:
                     try:
                         data = net.receive_message(reader)
+                        if data.startswith("REGISTER"):
+                            player_id = int(data.split(":", 1)[1])
+                            if 0 <= player_id < len(clients):
+                                player_sockets[reader] = player_id
+                                clients[player_id].connected = True
+                                add_to_output_area(
+                                    "Main",
+                                    f"Player {clients[player_id].name} registered with receiver.",
+                                    COLORS.GREEN
+                                )
+                            continue
                         handle_data(data, reader)
                     except ConnectionResetError:
+                        player_id = player_sockets.pop(reader, None)
+                        if player_id is not None:
+                            clients[player_id].connected = False
+                            if not is_oof_thread:
+                                add_to_output_area(
+                                    "Main",
+                                    f"Player {clients[player_id].name} at {address[0]} disconnected.",
+                                    COLORS.RED
+                                )
+                        elif not is_oof_thread:
+                            add_to_output_area(
+                                "Main",
+                                f"Player at {address[0]} disconnected.",
+                                COLORS.RED
+                            )
+                        if reader in to_read:
+                            to_read.remove(reader)
+                        reader.close()
+                    if len(to_read) == 1:
                         if not is_oof_thread:
-                            add_to_output_area("Main", f"Player at {address[0]} disconnected.", COLORS.RED)
-                        to_read.remove(reader) # remove from monitoring
-
-                        # TODO send a message to each player to query who is still connected, then properly remove
-                        # the disconnected player from the game. Currently only removing the first player in clients list. 
-                        # clients.pop(0)
-
-                    # if not data: # No data indicates disconnect
-                    #     add_to_output_area("Main", f"Player at {address[0]} disconnected.", s.COLORS.RED)
-                    #     to_read.remove(reader) # remove from monitoring
-                if(len(to_read) == 1):
-                    if not is_oof_thread:
-                        if "-stayopen" not in sys.argv:
-                            add_to_output_area("Main", "All connections dropped. Receiver stopped.", COLORS.GREEN)
-                            return
-                        else:
-                            add_to_output_area("Main", "All connections dropped. Receiver will stay open.", COLORS.GREEN)
-                            # Reopen the server socket
-                            server_socket.close()
-                            start_server()
-
+                            if "-stayopen" not in sys.argv:
+                                add_to_output_area(
+                                      "Main",
+                                    "All connections dropped. Receiver stopped.",
+                                    COLORS.GREEN
+                                )
+                                return
+                            else:
+                                add_to_output_area(
+                                    "Main",
+                                    "All connections dropped. Receiver will stay open.",
+                                    COLORS.GREEN
+                                )
+    
+    
 def set_unittest() -> None:
     """
     Unit test function for the Banker module.
@@ -588,45 +623,90 @@ def set_gamerules() -> None:
         set_gamerules()
 
 def monopoly_controller(unit_test) -> None:
-    """
-    Controls the flow of the Monopoly game.
-
-    This function initializes the Monopoly game, waits for players to connect,
-    and then enters a loop to manage turns. It sends the game board to the 
-    current player and prompts them to roll the dice.
-
-    This function does nothing if a Monopoly game is not set to play during Banker setup.
-    It will still purchase properties and change player cash, though, if specified in the unit test.
-
-    Returns:
-        None
-    """
     add_to_output_area("Monopoly", "About to start Monopoly game.")
     mply.unittest(unit_test)
 
     if not play_monopoly:
-        add_to_output_area("Monopoly", "No players in the game. Not attempting to run Monopoly.")
+        add_to_output_area(
+            "Monopoly",
+            "No players in the game. Not attempting to run Monopoly."
+        )
         ss.set_cursor(25, 5)
         print("Error: Monopoly game not started.")
         return
-    sleep(5) # Temporary sleep to give all players time to connect to the receiver TODO remove this and implement a better way to check all are connected to rcvr
-    net.send_notif(clients[mply.turn].socket, mply.get_gameboard() + ss.set_cursor_str(0, 38) + "Welcome to Monopoly! It's your turn. Type roll to roll the dice.", "MPLY:")
-    add_to_output_area("Monopoly", "Sent gameboard to player 0.")
-    last_turn = 0
+
+    sleep(5)
+
+    last_turn = None
+
     while True:
         sleep(1)
-        if mply.turn != last_turn:
-            # if disconnect, move to next player
-            try:
-                ss.set_cursor(0, 20)
-                last_turn = mply.turn
-                net.send_notif(clients[mply.turn].socket, mply.get_gameboard() + ss.set_cursor_str(0, 38) + "It's your turn. Type roll to roll the dice.", "MPLY:")
-                clients[mply.turn].can_roll = True
-                # ss.set_cursor(ss.MONOPOLY_OUTPUT_COORDINATES[0]+1, ss.MONOPOLY_OUTPUT_COORDINATES[1]+1)
-                add_to_output_area("Monopoly", f"Player turn: {mply.turn}. Sent gameboard to {clients[mply.turn].name}.")
-            except:
-                add_to_output_area("Monopoly", f"Player turn: {mply.turn}. Disconnected")
-                mply.end_turn()
+
+        if mply.turn == last_turn:
+            continue
+
+        current_client = clients[mply.turn]
+
+        if not current_client.connected:
+            add_to_output_area(
+                "Monopoly",
+                f"{current_client.name} is disconnected. Skipping turn.",
+                COLORS.RED
+            )
+
+            if not any(client.connected for client in clients):
+                add_to_output_area(
+                    "Monopoly",
+                    "All players disconnected. Stopping Monopoly game.",
+                    COLORS.RED
+                )
+                return
+
+            mply.end_turn()
+            last_turn = None
+            continue
+
+        try:
+            if last_turn is None:
+                message = "Welcome to Monopoly! It's your turn. Type roll to roll the dice."
+            else:
+                message = "It's your turn. Type roll to roll the dice."
+
+            net.send_notif(
+                current_client.socket,
+                mply.get_gameboard()
+                + ss.set_cursor_str(0, 38)
+                + message,
+                "MPLY:"
+            )
+
+            current_client.can_roll = True
+            last_turn = mply.turn
+
+            add_to_output_area(
+                "Monopoly",
+                f"Player turn: {mply.turn}. Sent gameboard to {current_client.name}."
+            )
+
+        except OSError:
+            current_client.connected = False
+
+            add_to_output_area(
+                "Monopoly",
+                f"{current_client.name} disconnected. Skipping turn.",
+                COLORS.RED
+            )
+
+            if not any(client.connected for client in clients):
+                add_to_output_area(
+                    "Monopoly",
+                    "All players disconnected. Stopping Monopoly game.",
+                    COLORS.RED
+                )
+                return
+
+            mply.end_turn()
+            last_turn = None
 def monopoly_game(client: Client = None, cmd: str = None) -> None:
     """
     Description:

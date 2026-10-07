@@ -69,19 +69,15 @@ def send_notif(other: socket.socket, text: str, header: str="NOTF:") -> None:
     new_socket.close()
 
 def receive_message(other: socket.socket) -> str:
-    """
-    Receives a message from a client socket.
-    
-    Parameters:
-        client (socket.socket) The client socket to receive the message from.
-    
-    Returns:
-        str representing the message received.
-    """
     full_msg = bytearray(b'')
     new_msg = True
+
     while True:
         msg = other.recv(16)
+
+        if not msg:
+            raise ConnectionResetError("Connection closed by peer.")
+
         if new_msg:
             msglen = int(msg[:HEADERSIZE])
             new_msg = False

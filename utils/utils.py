@@ -19,6 +19,7 @@ class Client:
         self.socket = socket
         self.id = id
         self.name = name
+        self.connected = True
         self.inventory = inventory_object
         self.can_roll = True
         self.num_rolls = 0
